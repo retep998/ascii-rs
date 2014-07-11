@@ -1,0 +1,8 @@
+*
+!.gitignore
+!.travis.yml
+!Cargo.toml
+!README.md
+!LICENSE.txt
+!*.rs
+!src/

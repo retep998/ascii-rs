@@ -1,0 +1,14 @@
+[package]
+
+name = "NoLifeAscii"
+version = "0.1.0"
+authors = ["Peter Atashian <retep998@gmail.com>"]
+
+[[bin]]
+
+name = "ascii"
+path = "src/ascii.rs"
+
+[dependencies.image]
+
+git = "https://github.com/ozkriff/rust-stb-image.git"
