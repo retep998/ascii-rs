@@ -1,9 +1,10 @@
 
 use libc::{c_uchar, c_uint, size_t, free, c_void};
-use std::cell::Cell;
-use std::io::fs::File;
-use std::mem::uninitialized;
-use std::slice::raw::buf_as_slice;
+use std::cell::{Cell};
+use std::io::fs::{File};
+use std::mem::{uninitialized};
+use std::num::{Zero};
+use std::slice::raw::{buf_as_slice};
 
 #[link(name = "lodepng")]
 extern {
@@ -22,6 +23,17 @@ pub struct Color<T> {
     pub a: T,
 }
 
+impl<T: Zero> Color<T> {
+    pub fn black() -> Color<T> {
+        Color {
+            r: Zero::zero(),
+            g: Zero::zero(),
+            b: Zero::zero(),
+            a: Zero::zero(),
+        }
+    }
+}
+
 impl Color<u8> {
     fn to_linear(&self, table: &Table) -> Color<f32> {
         Color {
@@ -34,14 +46,24 @@ impl Color<u8> {
 }
 
 pub struct Image<T> {
-    width: u32,
-    height: u32,
+    width: uint,
+    height: uint,
     pixels: Vec<Cell<Color<T>>>,
 }
 
 impl<T> Image<T> {
-    pub fn width(&self) -> u32 { self.width }
-    pub fn height(&self) -> u32 { self.height }
+    pub fn width(&self) -> uint { self.width }
+    pub fn height(&self) -> uint { self.height }
+}
+
+impl<T: Zero + Copy> Image<T> {
+    pub fn get(&self, x: uint, y: uint) -> Color<T> {
+        let i = y * self.width + x;
+        match self.pixels.as_slice().get(i) {
+            Some(c) => c.get(),
+            None => Color::black(),
+        }
+    }
 }
 
 impl Image<u8> {
@@ -65,7 +87,9 @@ impl Image<u8> {
         };
         unsafe { free(outbuf as *mut c_void) };
         Ok(Image {
-            width: width, height: height, pixels: pixels,
+            width: width as uint,
+            height: height as uint,
+            pixels: pixels,
         })
     }
     pub fn to_linear(&self, table: &Table, back: Color<u8>) -> Image<f32> {
