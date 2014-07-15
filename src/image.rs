@@ -34,6 +34,23 @@ impl<T: Zero> Color<T> {
     }
 }
 
+impl<T: Signed> Color<T> {
+    pub fn diff(&self, rhs: &Color<T>) -> Color<T> {
+        Color {
+            r: self.r.abs_sub(&rhs.r),
+            g: self.g.abs_sub(&rhs.g),
+            b: self.b.abs_sub(&rhs.b),
+            a: self.a.abs_sub(&rhs.a),
+        }
+    }
+}
+
+impl<T: Add<T, T>> Color<T> {
+    pub fn luminance(&self) -> T {
+        self.r + self.g + self.b
+    }
+}
+
 impl Color<u8> {
     fn to_linear(&self, table: &Table) -> Color<f32> {
         Color {
@@ -41,6 +58,50 @@ impl Color<u8> {
             g: table.g[self.g as uint],
             b: table.b[self.b as uint],
             a: table.a[self.a as uint],
+        }
+    }
+}
+
+impl Color<f32> {
+    pub fn from_rgb(r: u8, g: u8, b: u8, table: &Table) -> Color<f32> {
+        Color {
+            r: r,
+            g: g,
+            b: b,
+            a: 0xff,
+        }.to_linear(table)
+    }
+}
+
+impl<T: Mul<T, T>> Mul<T, Color<T>> for Color<T> {
+    fn mul(&self, rhs: &T) -> Color<T> {
+        Color {
+            r: self.r.mul(rhs),
+            g: self.g.mul(rhs),
+            b: self.b.mul(rhs),
+            a: self.a.mul(rhs),
+        }
+    }
+}
+
+impl<T: Add<T, T>> Add<Color<T>, Color<T>> for Color<T> {
+    fn add(&self, rhs: &Color<T>) -> Color<T> {
+        Color {
+            r: self.r.add(&rhs.r),
+            g: self.g.add(&rhs.g),
+            b: self.b.add(&rhs.b),
+            a: self.a.add(&rhs.a),
+        }
+    }
+}
+
+impl<T: Sub<T, T>> Sub<Color<T>, Color<T>> for Color<T> {
+    fn sub(&self, rhs: &Color<T>) -> Color<T> {
+        Color {
+            r: self.r.sub(&rhs.r),
+            g: self.g.sub(&rhs.g),
+            b: self.b.sub(&rhs.b),
+            a: self.a.sub(&rhs.a),
         }
     }
 }
@@ -100,7 +161,7 @@ impl Image<u8> {
                 r: pixel.r * pixel.a + back.r * (1. - pixel.a),
                 g: pixel.g * pixel.a + back.g * (1. - pixel.a),
                 b: pixel.b * pixel.a + back.b * (1. - pixel.a),
-                a: 1.
+                a: pixel.a * pixel.a + back.a * (1. - pixel.a),
             })
         }).collect();
         Image { width: self.width, height: self.height, pixels: pixels }
@@ -129,9 +190,9 @@ impl Table {
         let mut a: [f32, ..0x100] = unsafe { uninitialized() };
         for i in range(0u, 0x100) {
             let val = srgb_to_linear(i as f32 / 255.);
-            r[i] = val * 0.2126;
-            g[i] = val * 0.7152;
-            b[i] = val * 0.0722;
+            r[i] = val * (0.2126 * 100.);
+            g[i] = val * (0.7152 * 100.);
+            b[i] = val * (0.0722 * 100.);
             a[i] = val;
         }
         Table { r: r, g: g, b: b, a: a }
