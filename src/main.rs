@@ -16,7 +16,7 @@ use std::io::{File};
 use std::iter::{AdditiveIterator};
 use std::num::{Zero};
 
-#[deriving(Show)]
+#[deriving(Show, Clone)]
 struct TermColor(Pixel, u8);
 impl PartialEq for TermColor {
     fn eq(&self, o: &TermColor) -> bool {
@@ -32,7 +32,7 @@ impl PartialEq for Coverage {
     }
 }
 
-#[deriving(Show, PartialEq, PartialOrd)]
+#[deriving(Show, PartialEq, PartialOrd, Clone)]
 struct Pixel(f32, f32, f32);
 impl Pixel {
     fn gray(&self) -> f32 {
@@ -43,6 +43,9 @@ impl Pixel {
     }
     fn sqsum(&self) -> f32 {
         self.0 * self.0 + self.1 * self.1 + self.2 * self.2
+    }
+    fn magnitude(&self) -> f32 {
+        self.sqsum().sqrt()
     }
     fn dot(&self, o: &Pixel) -> f32 {
         self.0 * o.0 + self.1 * o.1 + self.2 * o.2
@@ -121,7 +124,8 @@ struct Config {
     charheight: u32,
     offsetx: u32,
     offsety: u32,
-    chars: String
+    chars: String,
+    fullcolor: bool,
 }
 impl Config {
     fn load() -> Config {
@@ -200,7 +204,7 @@ impl Ascii {
     }
     fn calc_colors(&mut self) {
         let img = self.load(&Path::new("colors.png"));
-        self.colors = range(0u32, 256).map(|i| {
+        self.colors = range(0u32, if self.config.fullcolor { 256 } else { 16 }).map(|i| {
             let x = i % self.config.winwidth * self.config.charwidth + self.config.offsetx;
             let y = i / self.config.winwidth * self.config.charheight + self.config.offsety;
             TermColor(img.get(x, y), i as u8)
@@ -243,7 +247,7 @@ impl Ascii {
             img.resize(w, wh)
         }
     }
-    fn closest(&self, p: &Pixel) -> (u8, u8, char, Pixel) {
+    fn get_closest(&self, p: &Pixel) -> Vec<TermColor> {
         struct Entry(Pixel, u8, f32);
         impl Ord for Entry {
             fn cmp(&self, o: &Entry) -> Ordering {
@@ -261,11 +265,21 @@ impl Ascii {
                 self.2 == o.2
             }
         }
-        let mut colors: PriorityQueue<_> = self.colors.iter().map(|c| {
-            let d = (c.0 - *p).abs().gray();
-            Entry(c.0, c.1, d)
-        }).collect();
-        let colors: Vec<_> = range(0, 10u).map(|_| colors.pop().unwrap()).collect();
+        if self.config.fullcolor {
+            let mut colors: PriorityQueue<_> = self.colors.iter().map(|c| {
+                let d = (c.0 - *p).abs().gray();
+                Entry(c.0, c.1, d)
+            }).collect();
+            range(0, 20u).map(|_| {
+                let e = colors.pop().unwrap();
+                TermColor(e.0, e.1)
+            }).collect()
+        } else {
+            self.colors.clone()
+        }
+    }
+    fn closest(&self, p: &Pixel) -> (u8, u8, char, Pixel) {
+        let colors = self.get_closest(p);
         let mut bestdiff = 100f32;
         let mut best = (0, colors[0].1, ' ', p - colors[0].0);
         for c1 in colors.iter() {
@@ -284,9 +298,9 @@ impl Ascii {
                     NotFound(x) => self.chars[x - 1],
                 };
                 let color = c1.0 * Pixel(1. - n, 1. - n, 1. - n) + c2.0 * Pixel(n, n, n);
-                let diff = color - *p;
+                let diff = *p - color;
                 let sdiff = c2.0 - c1.0;
-                let d = diff.abs().sqsum();
+                let d = diff.abs().magnitude() + sdiff.abs().magnitude() * 0.2;
                 if d < bestdiff {
                     bestdiff = d;
                     best = (c2.1, c1.1, ch, diff);
@@ -337,8 +351,11 @@ fn bg(x: u8) {
 
 fn main() {
     let mut ascii = Ascii::new();
-    // ascii.print_chars();
-    ascii.prepare();
-    ascii.convert(&Path::new("winter_evening_by_gign_3208-d6vvbvo.png"));
-    // ascii.convert(&Path::new("RainbowDashFluff.png"));
+    let args = std::os::args();
+    if args.len() <= 1 {
+        ascii.print_chars();
+    } else {
+        ascii.prepare();
+        ascii.convert(&Path::new(args[1][]));
+    }
 }
