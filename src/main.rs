@@ -315,6 +315,20 @@ impl Ascii {
         let width = img.width;
         img.pixels.reserve_additional(width as uint * 2);
         let pixels = img.pixels[];
+        let mut fg = 15;
+        let mut bg = 0;
+        let set = |f: u8, b: u8| {
+            if f == fg && b == bg { return }
+            if f == fg {
+                print!("\x1b[48;5;{}m", b);
+            } else if b == bg {
+                print!("\x1b[38;5;{}m", f);
+            } else {
+                print!("\x1b[38;5;{};48;5;{}m", f, b);
+            }
+            fg = f;
+            bg = b;
+        };
         for (y, chunk) in pixels.chunks(img.width as uint).enumerate() {
             for (x, p) in chunk.iter().enumerate() {
                 let (f, b, c, diff) = self.closest(&p.get());
@@ -332,11 +346,10 @@ impl Ascii {
                 adjust(-1, 2, 2. / 32.);
                 adjust( 0, 2, 3. / 32.);
                 adjust( 1, 2, 2. / 32.);
-                fg(f);
-                bg(b);
+                set(f, b);
                 print!("{}", c);
             }
-            bg(0);
+            set(15, 0);
             println!("");
         }
     }
@@ -348,6 +361,7 @@ fn fg(x: u8) {
 fn bg(x: u8) {
     print!("\x1b[48;5;{}m", x);
 }
+
 
 fn main() {
     let mut ascii = Ascii::new();
