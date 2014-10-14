@@ -36,7 +36,7 @@ impl PartialEq for Coverage {
 struct Pixel(f32, f32, f32);
 impl Pixel {
     fn gray(&self) -> f32 {
-        (self.0 + self.1 + self.2) / 3.
+        (self.0 + self.1 + self.2) * (1. / 3.)
     }
     fn abs(&self) -> Pixel {
         Pixel(self.0.abs(), self.1.abs(), self.2.abs())
@@ -125,7 +125,9 @@ struct Config {
     offsetx: u32,
     offsety: u32,
     chars: String,
-    fullcolor: bool,
+    colors: Vec<u8>,
+    smoothness: f32,
+    choices: u8,
 }
 impl Config {
     fn load() -> Config {
@@ -135,7 +137,6 @@ impl Config {
     }
 }
 
-#[deriving(Show)]
 struct Ascii {
     config: Config,
     table: Vec<f32>,
@@ -204,7 +205,7 @@ impl Ascii {
     }
     fn calc_colors(&mut self) {
         let img = self.load(&Path::new("colors.png"));
-        self.colors = range(0u32, if self.config.fullcolor { 256 } else { 16 }).map(|i| {
+        self.colors = range(0u32, 256).map(|i| {
             let x = i % self.config.winwidth * self.config.charwidth + self.config.offsetx;
             let y = i / self.config.winwidth * self.config.charheight + self.config.offsety;
             TermColor(img.get(x, y), i as u8)
@@ -224,6 +225,10 @@ impl Ascii {
         }).collect();
         self.colors.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         self.colors.dedup();
+        if !self.config.colors.is_empty() {
+            let colors = self.config.colors.clone();
+            self.colors.retain(|x| colors.contains(&x.1));
+        }
         self.chars.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         self.chars.dedup();
         self.chars.retain(|x| x.1 <= 0.5);
@@ -265,12 +270,12 @@ impl Ascii {
                 self.2 == o.2
             }
         }
-        if self.config.fullcolor {
+        if self.colors.len() as u8 > self.config.choices {
             let mut colors: PriorityQueue<_> = self.colors.iter().map(|c| {
-                let d = (c.0 - *p).abs().gray();
+                let d = (c.0 - *p).abs().magnitude();
                 Entry(c.0, c.1, d)
             }).collect();
-            range(0, 20u).map(|_| {
+            range(0, self.config.choices).map(|_| {
                 let e = colors.pop().unwrap();
                 TermColor(e.0, e.1)
             }).collect()
@@ -280,12 +285,12 @@ impl Ascii {
     }
     fn closest(&self, p: &Pixel) -> (u8, u8, char, Pixel) {
         let colors = self.get_closest(p);
-        let mut bestdiff = 100f32;
+        let mut bestdiff = 9001f32;
         let mut best = (0, colors[0].1, ' ', p - colors[0].0);
         for c1 in colors.iter() {
             for c2 in colors.iter() {
                 let (v1, v2) = (p - c1.0, c2.0 - c1.0);
-                let cover = if v2.abs().gray() < 0.0001 {
+                let cover = if v2.abs().gray() < 0.00001 {
                     0.
                 } else {
                     v1.dot(&v2) / v2.sqsum()
@@ -299,8 +304,8 @@ impl Ascii {
                 };
                 let color = c1.0 * Pixel(1. - n, 1. - n, 1. - n) + c2.0 * Pixel(n, n, n);
                 let diff = *p - color;
-                let sdiff = c2.0 - c1.0;
-                let d = diff.abs().magnitude() + sdiff.abs().magnitude() * 0.2;
+                let sdiff = (c2.0 - color).magnitude() + (c1.0 - color).magnitude();
+                let d = diff.magnitude() + sdiff * self.config.smoothness;
                 if d < bestdiff {
                     bestdiff = d;
                     best = (c2.1, c1.1, ch, diff);
@@ -336,6 +341,7 @@ impl Ascii {
                     let cell = unsafe { pixels.unsafe_get((y + oy) * (width as uint) + x + ox) };
                     cell.set(cell.get() + diff * Pixel(mult, mult, mult));
                 };
+                // Sierra dithering
                 adjust( 1, 0, 5. / 32.);
                 adjust( 2, 0, 3. / 32.);
                 adjust( 2, 1, 2. / 32.);
