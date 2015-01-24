@@ -128,4 +128,5 @@ fn main() {
     } else {
         ascii.convert(&args[1]);
     }
+    println!("Test");
 }
