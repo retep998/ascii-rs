@@ -8,7 +8,7 @@ extern crate "kernel32-sys" as kernel32;
 extern crate "nalgebra" as na;
 extern crate winapi;
 
-use colors::{Pixel, RGB, ToRGB};
+use colors::{Pixel, RGB};
 use std::num::{Float, ToPrimitive};
 use std::old_io::stdio::{stdin};
 use std::rand::{random};
@@ -55,22 +55,19 @@ impl Ascii {
         self.display("Converting to RGBA");
         let img = img.to_rgba();
         let mut count = 0;
-        for r in 0..256 {
-            for g in 0..256 {
-                for b in 0..256 {
-                    let rgb: Pixel<RGB> = Pixel::new(r as f32 / 255., g as f32 / 255., b as f32 / 255.);
-                    let xyz = rgb.to_xyz();
-                    let trans = xyz.to_rgb();
-                    let log = (trans - rgb).magnitude().log2();
-                    if log > -20. { count += 1 }
+        for r in 1..256 {
+            for g in 1..256 {
+                for b in 1..256 {
+                    let srgb = Pixel::new(r as f32 / 255., g as f32 / 255., b as f32 / 255.);
+                    let rgb = Pixel::from_srgb(r as u8, g as u8, b as u8);
+                    let trans = rgb.to_xyz().to_rgb().to_srgb();
+                    let diff = (trans - srgb).magnitude().log2();
+                    if diff > -10. { count += 1 }
                 }
             }
             self.display(&format!("{}%", r * 100 / 255));
         }
-        self.display(&format!("Failures: {}/{}", count, 256 * 256 * 256));
-        println!("");
-        let rgb: Pixel<RGB> = Pixel::new(1., 1., 1.);
-        println!("{:?}", rgb.to_xyz());
+        self.display(&format!("Failures: {}/{}", count, 255 * 255 * 255));
         stdin().read_line().unwrap();
     }
     fn display(&self, s: &str) {
@@ -86,6 +83,40 @@ impl Ascii {
 impl Drop for Ascii {
     fn drop(&mut self) {
         self.console.set_info_ex(&self.cinfo).unwrap();
+    }
+}
+
+#[allow(non_snake_case)]
+fn gen1() {
+    use na::{Inv, Iterable, Mat3, Vec3};
+    let (xr, yr) = (0.64, 0.33);
+    let (xg, yg) = (0.30, 0.60);
+    let (xb, yb) = (0.15, 0.06);
+    let (xw, yw) = (0.31271, 0.32902);
+    let (Xw, Yw, Zw) = (xw / yw, 1., (1. - xw - yw) / yw);
+    let (Xr, Xg, Xb) = (xr / yr, xg / yg, xb / yb);
+    let (Yr, Yg, Yb) = (1., 1., 1.);
+    let (Zr, Zg, Zb) = ((1. - xr - yr) / yr, (1. - xg - yg) / yg, (1. - xb - yb) / yb);
+    let mat = Mat3::new(Xr, Xg, Xb, Yr, Yg, Yb, Zr, Zg, Zb);
+    let &[Sr, Sg, Sb] = (mat.inv().unwrap() * Vec3::new(Xw, Yw, Zw)).as_array();
+    let M = Mat3::new(Sr * Xr, Sg * Xg, Sb * Xb, Sr * Yr, Sg * Yg, Sb * Yb, Sr * Zr, Sg * Zg, Sb * Zb);
+    let Mi = M.inv().unwrap();
+    for n in M.iter() {
+        print!("{:.10e}, ", n);
+    }
+    println!("");
+    for n in Mi.iter() {
+        print!("{:.10e}, ", n);
+    }
+}
+fn gen2() {
+    fn c(x: f64) -> f64 {
+        if x <= 0.04045 { x / 12.92 }
+        else { ((x + 0.055) / (1. + 0.055)).powf(2.4) }
+    }
+    for i in 0..256 {
+        if i % 5 == 0 { println!("") }
+        print!("{:.10e}, ", c(i as f64 / 255.))
     }
 }
 #[allow(non_snake_case)]
