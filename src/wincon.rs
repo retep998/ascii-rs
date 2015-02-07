@@ -3,6 +3,7 @@
 use kernel32 as k32;
 use winapi::*;
 use std::mem::{size_of_val, zeroed};
+use std::num::{ToPrimitive};
 use std::old_io::{IoError, IoResult};
 use std::ptr::{self};
 #[derive(Copy, Debug)]
@@ -35,18 +36,20 @@ impl Console {
     }
     pub fn get_info_ex(&self) -> IoResult<ConInfoEx> {
         let mut info: CONSOLE_SCREEN_BUFFER_INFOEX = unsafe { zeroed() };
-        info.cbSize = size_of_val(&info) as ULONG;
+        info.cbSize = size_of_val(&info).to_u32().unwrap();
         match unsafe { k32::GetConsoleScreenBufferInfoEx(
             self.0, &mut info as PCONSOLE_SCREEN_BUFFER_INFOEX,
         ) } {
             0 => Err(IoError::last_error()),
-            _ => Ok(ConInfoEx(info)),
+            _ => {
+                info.srWindow.Right += 1;
+                info.srWindow.Bottom += 1;
+                Ok(ConInfoEx(info))
+            },
         }
     }
     pub fn set_info_ex(&self, info: &ConInfoEx) -> IoResult<()> {
         let mut info = info.0;
-        info.srWindow.Right += 1;
-        info.srWindow.Bottom += 1;
         match unsafe { k32::SetConsoleScreenBufferInfoEx(
             self.0, &mut info as PCONSOLE_SCREEN_BUFFER_INFOEX,
         ) } {
@@ -65,10 +68,19 @@ impl Console {
             _ => Ok(region),
         }
     }
+    pub fn write_output_chars(&self, buf: &[u16], pos: Vec2) -> IoResult<u32> {
+        let mut written = 0;
+        match unsafe { k32::WriteConsoleOutputCharacterW(
+            self.0, buf.as_ptr(), buf.len().to_u32().unwrap(), pos.0, &mut written as LPDWORD,
+        )} {
+            0 => Err(IoError::last_error()),
+            _ => Ok(written),
+        }
+    }
     pub fn read(&self, buf: &mut [u16]) -> IoResult<u32> {
         let mut read = 0;
         match unsafe { k32::ReadConsoleW(
-            self.0, buf.as_mut_ptr() as LPVOID, buf.len() as DWORD,
+            self.0, buf.as_mut_ptr() as LPVOID, buf.len().to_u32().unwrap(),
             &mut read as LPDWORD, ptr::null_mut(),
         ) } {
             0 => Err(IoError::last_error()),
@@ -83,6 +95,7 @@ impl ConInfoEx {
         self.0.ColorTable = *colors;
     }
     pub fn window(&self) -> Rect { Rect(self.0.srWindow) }
+    pub fn cursor(&self) -> Vec2 { Vec2(self.0.dwCursorPosition) }
 }
 #[derive(Copy, Debug)]
 pub struct FontInfo(CONSOLE_FONT_INFO);
@@ -104,7 +117,7 @@ pub struct CharInfo(CHAR_INFO);
 impl CharInfo {
     pub fn new(ch: char, at: Attr) -> CharInfo {
         CharInfo(CHAR_INFO {
-            Char: ch as u16,
+            Char: (ch as u32).to_u16().unwrap(),
             Attributes: at.0,
         })
     }
@@ -128,4 +141,11 @@ impl Rect {
     pub fn top(&self) -> i16 { self.0.Top }
     pub fn right(&self) -> i16 { self.0.Right }
     pub fn bottom(&self) -> i16 { self.0.Bottom }
+}
+#[derive(Copy, Debug)]
+pub struct Color(COLORREF);
+impl Color {
+    pub fn new(r: u8, g: u8, b: u8) -> Color {
+        Color((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+    }
 }

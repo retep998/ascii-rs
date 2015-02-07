@@ -1,66 +1,21 @@
 // Copyright © 2014, Peter Atashian
 
 #![allow(dead_code)]
-#![feature(core, io, os, path, rand, slicing_syntax)]
+#![feature(collections, core, io, os, path, rand, slicing_syntax)]
 
 extern crate image;
 extern crate "kernel32-sys" as kernel32;
+extern crate "nalgebra" as na;
 extern crate winapi;
 
-use std::cell::{Cell};
+use colors::{Pixel, RGB, ToRGB};
 use std::num::{Float, ToPrimitive};
-use std::ops::{Add, Div, Mul, Sub};
+use std::old_io::stdio::{stdin};
 use std::rand::{random};
 use wincon::{Attr, CharInfo, ConInfoEx, Console, Rect, Std, Vec2};
 
+mod colors;
 mod wincon;
-
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-struct Pixel(f32, f32, f32);
-impl Pixel {
-    fn gray(&self) -> f32 {
-        (self.0 + self.1 + self.2) * (1. / 3.)
-    }
-    fn abs(&self) -> Pixel {
-        Pixel(self.0.abs(), self.1.abs(), self.2.abs())
-    }
-    fn sqsum(&self) -> f32 {
-        self.0 * self.0 + self.1 * self.1 + self.2 * self.2
-    }
-    fn magnitude(&self) -> f32 {
-        self.sqsum().sqrt()
-    }
-    fn dot(&self, o: &Pixel) -> f32 {
-        self.0 * o.0 + self.1 * o.1 + self.2 * o.2
-    }
-    fn zero() -> Pixel {
-        Pixel(0., 0., 0.)
-    }
-}
-impl<'a> Add<&'a Pixel> for &'a Pixel {
-    type Output = Pixel;
-    fn add(self, o: &'a Pixel) -> Pixel {
-        Pixel(self.0 + o.0, self.1 + o.1, self.2 + o.2)
-    }
-}
-impl<'a> Sub<&'a Pixel> for &'a Pixel {
-    type Output = Pixel;
-    fn sub(self, o: &'a Pixel) -> Pixel {
-        Pixel(self.0 - o.0, self.1 - o.1, self.2 - o.2)
-    }
-}
-impl<'a> Mul<&'a Pixel> for &'a Pixel {
-    type Output = Pixel;
-    fn mul(self, o: &'a Pixel) -> Pixel {
-        Pixel(self.0 * o.0, self.1 * o.1, self.2 * o.2)
-    }
-}
-impl<'a> Div<&'a Pixel> for &'a Pixel {
-    type Output = Pixel;
-    fn div(self, o: &'a Pixel) -> Pixel {
-        Pixel(self.0 / o.0, self.1 / o.1, self.2 / o.2)
-    }
-}
 
 #[derive(Debug)]
 struct Ascii {
@@ -80,25 +35,52 @@ impl Ascii {
             cinfo: cinfo,
         }
     }
-    fn convert(&self, name: &str) {
-        let _path = Path::new(name);
-        let mut info = self.cinfo;
-        self.console.set_info_ex(&info).unwrap();
-        let ci = CharInfo::new('X', Attr::new_color(random(), random()));
-        let (w, h) = (20, 10);
-        let window = info.window();
-        let window = Rect::new(
-            window.left() + 10, window.top() + 10, window.left() + 10 + w, window.top() + 10 + h,
+    fn draw(&self) {
+        let info = self.console.get_info_ex().unwrap();
+        let win = info.window();
+        let win = Rect::new(
+            win.left(), win.top(), win.right(), win.bottom(),
         );
+        let (w, h) = (win.right() - win.left(), win.bottom() - win.top());
         let buf = (0..w * h).map(|_| {
             CharInfo::new('X', Attr::new(random::<u16>() & 0xff))
         }).collect::<Vec<_>>();
         self.console.write_output(
-            &buf, Vec2::new(w, h), Vec2::new(0, 0), window,
+            &buf, Vec2::new(w, h), Vec2::new(0, 0), win,
         ).unwrap();
-        let mut buf = [0; 100];
-        let cin = Console::get(Std::Input).unwrap();
-        cin.read(&mut buf).unwrap();
+    }
+    fn convert(&self, name: &str) {
+        self.display("Loading image");
+        let img = image::open(&Path::new(name)).unwrap();
+        self.display("Converting to RGBA");
+        let img = img.to_rgba();
+        let mut count = 0;
+        for r in 0..256 {
+            for g in 0..256 {
+                for b in 0..256 {
+                    let rgb: Pixel<RGB> = Pixel::new(r as f32 / 255., g as f32 / 255., b as f32 / 255.);
+                    let xyz = rgb.to_xyz();
+                    let trans = xyz.to_rgb();
+                    let log = (trans - rgb).magnitude().log2();
+                    if log > -20. { count += 1 }
+                }
+            }
+            self.display(&format!("{}%", r * 100 / 255));
+        }
+        self.display(&format!("Failures: {}/{}", count, 256 * 256 * 256));
+        println!("");
+        let rgb: Pixel<RGB> = Pixel::new(1., 1., 1.);
+        println!("{:?}", rgb.to_xyz());
+        stdin().read_line().unwrap();
+    }
+    fn display(&self, s: &str) {
+        let mut buf = s.chars().map(|c| (c as u32).to_u16().unwrap()).collect::<Vec<_>>();
+        let info = self.console.get_info_ex().unwrap();
+        let win = info.window();
+        let width = win.right() - win.left();
+        buf.resize(width.to_uint().unwrap(), 32);
+        let pos = info.cursor();
+        self.console.write_output_chars(&buf, pos).unwrap();
     }
 }
 impl Drop for Ascii {
@@ -106,7 +88,7 @@ impl Drop for Ascii {
         self.console.set_info_ex(&self.cinfo).unwrap();
     }
 }
-
+#[allow(non_snake_case)]
 fn main() {
     let ascii = Ascii::new();
     let args = std::os::args();
