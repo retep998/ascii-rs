@@ -1,17 +1,20 @@
 // Copyright © 2014, Peter Atashian
 
 #![allow(dead_code)]
-#![feature(collections, core, io, os, path, rand, slicing_syntax)]
+#![feature(slice_patterns, test, vec_resize)]
 
 extern crate image;
-extern crate "kernel32-sys" as kernel32;
-extern crate "nalgebra" as na;
+extern crate kernel32;
+extern crate nalgebra as na;
+extern crate test;
 extern crate winapi;
 
-use colors::{Pixel, RGB};
-use std::num::{Float, ToPrimitive};
-use std::old_io::stdio::{stdin};
-use std::rand::{random};
+use colors::{Pixel, RGB, Lab};
+use na::{Vec3};
+use std::io::{stdin};
+use std::path::{Path};
+use test::{Bencher};
+use test::black_box as bb;
 use wincon::{Attr, CharInfo, ConInfoEx, Console, Rect, Std, Vec2};
 
 mod colors;
@@ -27,7 +30,7 @@ impl Ascii {
     fn new() -> Ascii {
         let console = Console::get(Std::Output).unwrap();
         let finfo = console.get_font_info().unwrap();
-        let csize = (finfo.width().to_u32().unwrap(), finfo.height().to_u32().unwrap());
+        let csize = (finfo.width() as u32, finfo.height() as u32);
         let cinfo = console.get_info_ex().unwrap();
         Ascii {
             console: console,
@@ -36,20 +39,31 @@ impl Ascii {
         }
     }
     fn draw(&self) {
-        let info = self.console.get_info_ex().unwrap();
-        let win = info.window();
-        let win = Rect::new(
-            win.left(), win.top(), win.right(), win.bottom(),
-        );
-        let (w, h) = (win.right() - win.left(), win.bottom() - win.top());
-        let buf = (0..w * h).map(|_| {
-            CharInfo::new('X', Attr::new(random::<u16>() & 0xff))
+        let buf = (0..16).map(|i| {
+            CharInfo::new('X', Attr::new_color(i, i))
         }).collect::<Vec<_>>();
+        let info = self.console.get_info_ex().unwrap();
+        let pos = info.cursor();
+        let win = Rect::new(
+            pos.x(), pos.y(), pos.x() + 16, pos.y() + 1,
+        );
         self.console.write_output(
-            &buf, Vec2::new(w, h), Vec2::new(0, 0), win,
+            &buf, Vec2::new(16, 1), Vec2::new(0, 0), win,
         ).unwrap();
     }
+    
     fn convert(&self, name: &str) {
+        fn cbrt(t: f32) -> f32 {
+            use std::mem::transmute;
+            let ix: u32 = unsafe { transmute(t) };
+            let ix = ix / 4 + ix / 16;
+            let ix = ix + ix / 16;
+            let ix = ix + ix / 256;
+            let ix = 0x2a5137a0 + ix;
+            let x: f32 = unsafe { transmute(ix) };
+            let x = 0.33333333 * (2. * x + t / (x * x));
+            0.33333333 * (2. * x + t / (x * x))
+        }
         self.display("Loading image");
         let img = image::open(&Path::new(name)).unwrap();
         self.display("Converting to RGBA");
@@ -58,34 +72,66 @@ impl Ascii {
         for r in 1..256 {
             for g in 1..256 {
                 for b in 1..256 {
-                    let srgb = Pixel::new(r as f32 / 255., g as f32 / 255., b as f32 / 255.);
-                    let rgb = Pixel::from_srgb(r as u8, g as u8, b as u8);
-                    let trans = rgb.to_xyz().to_rgb().to_srgb();
-                    let diff = (trans - srgb).magnitude().log2();
-                    if diff > -10. { count += 1 }
+                    let rgb = Pixel::decode(r as u8, g as u8, b as u8);
+                    let a = rgb.rgb_to_xyz();
+                    let b = a.xyz_to_lab().lab_to_xyz();
+                    let diff = (b - a).magnitude().log2();
+                    if diff > -18. { count += 1 }
                 }
             }
             self.display(&format!("{}%", r * 100 / 255));
         }
         self.display(&format!("Failures: {}/{}", count, 255 * 255 * 255));
-        stdin().read_line().unwrap();
+        println!("");
+        self.draw();
     }
     fn display(&self, s: &str) {
-        let mut buf = s.chars().map(|c| (c as u32).to_u16().unwrap()).collect::<Vec<_>>();
+        let mut buf = s.chars().map(|c| (c as u32) as u16).collect::<Vec<_>>();
         let info = self.console.get_info_ex().unwrap();
         let win = info.window();
         let width = win.right() - win.left();
-        buf.resize(width.to_uint().unwrap(), 32);
+        buf.resize(width as usize, 32);
         let pos = info.cursor();
         self.console.write_output_chars(&buf, pos).unwrap();
     }
 }
 impl Drop for Ascii {
     fn drop(&mut self) {
+        let mut s = String::new();
+        stdin().read_line(&mut s).unwrap();
         self.console.set_info_ex(&self.cinfo).unwrap();
     }
 }
-
+#[bench] fn bench_to_lab(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).xyz_to_lab()
+    })
+}
+#[bench] fn bench_from_lab(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).lab_to_xyz()
+    })
+}
+#[bench] fn bench_to_xyz(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).rgb_to_xyz()
+    })
+}
+#[bench] fn bench_from_xyz(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).xyz_to_rgb()
+    })
+}
+#[bench] fn bench_decode(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::decode(bb(40), bb(41), bb(42))
+    })
+}
+#[bench] fn bench_encode(b: &mut Bencher) {
+    b.iter(|| {
+        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).encode()
+    })
+}
 #[allow(non_snake_case)]
 fn gen1() {
     use na::{Inv, Iterable, Mat3, Vec3};
@@ -121,12 +167,46 @@ fn gen2() {
 }
 #[allow(non_snake_case)]
 fn main() {
-    let ascii = Ascii::new();
-    let args = std::os::args();
-    if args.len() < 2 {
-        println!("Nothing to do!");
-    } else {
-        ascii.convert(&args[1]);
+    let m = 25.;
+    let c0 = 0.5;
+    let c1 = 3f32.sqrt() / 2.;
+    let c2 = 6f32.sqrt() / 3.;
+    let c3 = 3f32.sqrt() / 3.;
+    let mut v = Vec::new();
+    for x in -20..20 {
+        for y in -20..20 {
+            for z in 0..20 {
+                let (xf, yf, zf) = (x as f32 * m, y as f32 * m, z as f32 * m);
+                let mut a = xf;
+                if y % 2 == 0 { a += m * c0 };
+                let mut b = yf * c1;
+                if z % 2 == 0 { b += m * c3 };
+                let l = zf * c2;
+                let lab = Pixel::new(l, a, b);
+                let xyz = lab.lab_to_xyz();
+                let rgb = xyz.xyz_to_rgb();
+                let (r, g, b) = (rgb.x(), rgb.y(), rgb.z());
+                if r < 0. || r > 1. || g < 0. || g > 1. || b < 0. || b > 1. { continue }
+                let srgb = rgb.encode();
+                let (r, g, b) = ((srgb.x() * 255.) as u8, (srgb.y() * 255.) as u8, (srgb.z() * 255.) as u8);
+                let dist = |x1, y1, z1, x2, y2, z2| {
+                    (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2)
+                };
+                let d1: f32 = dist(lab.x(), lab.y(), lab.z(), 0., 0., 0.).sqrt();
+                let d2: f32 = dist(lab.x(), lab.y(), lab.z(), 100., 0., 0.).sqrt();
+                v.push(((lab.x(), lab.y(), lab.z()), (r, g, b), d1.min(d2)));
+            }
+        }
     }
-    println!("Test");
+    v.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+    for &(lab, rgb, d) in &v {
+        println!("#{:02X}{:02X}{:02X} = ({:.0}, {:.0}, {:.0}) dist={:.0}",
+            rgb.0, rgb.1, rgb.2, lab.0, lab.1, lab.2, d);
+    }
+    println!("Total of {}", v.len());
+    // let p = p.lab_to_xyz().xyz_to_rgb();
+    // println!("{:?}", p);
+    // let p = p.encode();
+    // println!("{:?}", p);
+    // println!("#{:02x}{:02x}{:02x}", (p.0.x * 255.) as u8, (p.0.y * 255.) as u8, (p.0.z * 255.) as u8);
 }
