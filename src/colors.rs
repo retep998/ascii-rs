@@ -34,6 +34,11 @@ impl<T> Pixel<T> {
     pub fn z(&self) -> f32 {
         self.0.z
     }
+    pub fn dist(&self, o: Pixel<T>) -> f32 where T: Copy {
+        let d = *self - o;
+        let s = d * d;
+        (s.x() + s.y() + s.z()).sqrt()
+    }
 }
 impl<T> Add<Pixel<T>> for Pixel<T> {
     type Output = Pixel<T>;

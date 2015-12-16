@@ -1,20 +1,21 @@
 // Copyright © 2014, Peter Atashian
 
 #![allow(dead_code)]
-#![feature(slice_patterns, test, vec_resize)]
+#![feature(slice_patterns)]
 
 extern crate image;
 extern crate kernel32;
 extern crate nalgebra as na;
-extern crate test;
+extern crate rand;
 extern crate winapi;
 
 use colors::{Pixel, RGB, Lab};
 use na::{Vec3};
-use std::io::{stdin};
+use rand::{random};
+use std::env::{args};
+use std::fs::{File};
+use std::io::{stdin, Write};
 use std::path::{Path};
-use test::{Bencher};
-use test::black_box as bb;
 use wincon::{Attr, CharInfo, ConInfoEx, Console, Rect, Std, Vec2};
 
 mod colors;
@@ -165,8 +166,8 @@ fn gen2() {
         print!("{:.10e}, ", c(i as f64 / 255.))
     }
 }
-#[allow(non_snake_case)]
-fn main() {
+#[allow(non_snake_case, dead_code)]
+fn main2() {
     let m = 25.;
     let c0 = 0.5;
     let c1 = 3f32.sqrt() / 2.;
@@ -209,4 +210,90 @@ fn main() {
     // let p = p.encode();
     // println!("{:?}", p);
     // println!("#{:02x}{:02x}{:02x}", (p.0.x * 255.) as u8, (p.0.y * 255.) as u8, (p.0.z * 255.) as u8);
+}
+fn gen_rand_colors() {
+    let mut file = File::create(r"C:\Users\Peter\Dropbox\Public\colors.html").unwrap();
+    writeln!(&mut file, r"<!doctype html>
+<html>
+<head>
+<title>Colors</title>
+<style>
+* {{
+    margin: 0;
+    padding: 0;
+}}
+p {{
+    padding: 5px;
+}}
+</style>
+</head>
+<body>").unwrap();
+    let mut colors = Vec::new();
+    println!("Starting...");
+    for _ in 0..100 {
+        let mut best = ((0u8, 0u8, 0u8), Pixel::new(0., 0., 0.));
+        let mut best_diff = 1000.;
+        for _ in 0..100000 {
+            let (r, g, b) = (random(), random(), random());
+            let rgb = Pixel::decode(r, g, b);
+            let xyz = rgb.rgb_to_xyz();
+            let lab = xyz.xyz_to_lab();
+            let mut diff = 1.;
+            if lab.x() < 50. { continue }
+            for &(_, o_lab) in &colors {
+                diff *= lab.dist(o_lab);
+            }
+            if diff > best_diff {
+                best = ((r, g, b), lab);
+                best_diff = diff;
+            }
+        }
+        writeln!(&mut file, "<p style=\"background-color: #{0:02X}{1:02X}{2:02X}\">#{0:02X}{1:02X}{2:02X}</p>", (best.0).0, (best.0).1, (best.0).2).unwrap();
+        colors.push(best);
+    }
+    println!("Done!");
+    writeln!(&mut file, r"</body>
+</html>").unwrap();
+}
+#[allow(non_snake_case)]
+pub fn main3() {
+    let l = 80f32;
+    let m = 30f32;
+    let (mut oa, mut ob) = (40f32, 0f32);
+    'foo: for _ in 0..12 {
+        let dir = ob.atan2(oa);
+        for i in 0..1000 {
+            let (sin, cos) = (dir + (i as f32) * 0.00314159265358979).sin_cos();
+            let (na, nb) = (oa + m * cos, ob + m * sin);
+            let lab = Pixel::new(l, na, nb);
+            let xyz = lab.lab_to_xyz();
+            let rgb = xyz.xyz_to_rgb();
+            let (r, g, b) = (rgb.x(), rgb.y(), rgb.z());
+            if r < 0. || r > 1. || g < 0. || g > 1. || b < 0. || b > 1. { continue }
+            let srgb = rgb.encode();
+            let (r, g, b) = ((srgb.x() * 255.) as u8, (srgb.y() * 255.) as u8, (srgb.z() * 255.) as u8);
+            println!("#{:02X}{:02X}{:02X}", r, g, b);
+            oa = na;
+            ob = nb;
+            continue 'foo
+        }
+    }
+}
+fn image_pixel_sum() {
+    let img = image::open(&Path::new(&args().nth(1).unwrap())).unwrap();
+    let img = img.to_rgb();
+    let mut sum = Pixel::new(0., 0., 0.);
+    let t = (img.width() * img.height()) as f32;
+    let total = Pixel::new(t, t, t);
+    for p in img.pixels() {
+        let p = Pixel::decode(p.data[0], p.data[1], p.data[2]);
+        sum = sum + p;
+    }
+    let r = sum / total;
+    let r = r.rgb_to_xyz();
+    let r = r.xyz_to_lab();
+    println!("{}", r.x());
+}
+fn main() {
+    gen_rand_colors();
 }

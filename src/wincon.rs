@@ -117,7 +117,7 @@ pub struct CharInfo(CHAR_INFO);
 impl CharInfo {
     pub fn new(ch: char, at: Attr) -> CharInfo {
         CharInfo(CHAR_INFO {
-            Char: (ch as u32) as u16,
+            UnicodeChar: (ch as u32) as u16,
             Attributes: at.0,
         })
     }
