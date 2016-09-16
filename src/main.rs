@@ -1,299 +1,142 @@
-// Copyright © 2014, Peter Atashian
-
-#![allow(dead_code)]
-#![feature(slice_patterns)]
+// Copyright © 2016, Peter Atashian
 
 extern crate image;
-extern crate kernel32;
-extern crate nalgebra as na;
-extern crate rand;
-extern crate winapi;
+extern crate wio;
 
-use colors::{Pixel, RGB, Lab};
-use na::{Vec3};
-use rand::{random};
+use image::{open};
+use pixel::{Pixel};
 use std::env::{args};
-use std::fs::{File};
-use std::io::{stdin, Write};
-use std::path::{Path};
-use wincon::{Attr, CharInfo, ConInfoEx, Console, Rect, Std, Vec2};
+use wio::console::{CharInfo, Input, InputBuffer, ScreenBuffer};
 
-mod colors;
-mod wincon;
+mod pixel;
 
-#[derive(Debug)]
-struct Ascii {
-    console: Console,
-    csize: (u32, u32),
-    cinfo: ConInfoEx,
+const COLOR_TABLE: &'static [u32; 16] = &[
+    0x000000, 0x800000, 0x008000, 0x808000,
+    0x000080, 0x800080, 0x008080, 0xC0C0C0,
+    0x808080, 0xFF0000, 0x00FF00, 0xFFFF00,
+    0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF,
+];
+
+struct Image {
+    pixels: Vec<Pixel>,
+    width: u32,
+    height: u32,
 }
-impl Ascii {
-    fn new() -> Ascii {
-        let console = Console::get(Std::Output).unwrap();
-        let finfo = console.get_font_info().unwrap();
-        let csize = (finfo.width() as u32, finfo.height() as u32);
-        let cinfo = console.get_info_ex().unwrap();
-        Ascii {
-            console: console,
-            csize: csize,
-            cinfo: cinfo,
-        }
-    }
-    fn draw(&self) {
-        let buf = (0..16).map(|i| {
-            CharInfo::new('X', Attr::new_color(i, i))
-        }).collect::<Vec<_>>();
-        let info = self.console.get_info_ex().unwrap();
-        let pos = info.cursor();
-        let win = Rect::new(
-            pos.x(), pos.y(), pos.x() + 16, pos.y() + 1,
-        );
-        self.console.write_output(
-            &buf, Vec2::new(16, 1), Vec2::new(0, 0), win,
-        ).unwrap();
-    }
-    
-    fn convert(&self, name: &str) {
-        fn cbrt(t: f32) -> f32 {
-            use std::mem::transmute;
-            let ix: u32 = unsafe { transmute(t) };
-            let ix = ix / 4 + ix / 16;
-            let ix = ix + ix / 16;
-            let ix = ix + ix / 256;
-            let ix = 0x2a5137a0 + ix;
-            let x: f32 = unsafe { transmute(ix) };
-            let x = 0.33333333 * (2. * x + t / (x * x));
-            0.33333333 * (2. * x + t / (x * x))
-        }
-        self.display("Loading image");
-        let img = image::open(&Path::new(name)).unwrap();
-        self.display("Converting to RGBA");
+impl Image {
+    fn load(s: &str) -> Image {
+        let img = open(s).unwrap();
         let img = img.to_rgba();
-        let mut count = 0;
-        for r in 1..256 {
-            for g in 1..256 {
-                for b in 1..256 {
-                    let rgb = Pixel::decode(r as u8, g as u8, b as u8);
-                    let a = rgb.rgb_to_xyz();
-                    let b = a.xyz_to_lab().lab_to_xyz();
-                    let diff = (b - a).magnitude().log2();
-                    if diff > -18. { count += 1 }
+        let pixels = img.pixels().map(|pixel| {
+            Pixel::from_srgb(pixel.data[0], pixel.data[1], pixel.data[2], pixel.data[3])
+        }).collect();
+        Image {
+            pixels: pixels,
+            width: img.width(),
+            height: img.height(),
+        }
+    }
+    fn increase_size(&self, nw: u32, nh: u32) -> Image {
+        let mut buf = vec![Pixel::black(); (nw * nh) as usize];
+        for y in 0..self.height {
+            let orig = &self.pixels[(y * self.width) as usize..(y * self.width + self.width) as usize];
+            let line = &mut buf[(y * nw) as usize..(y * nw + self.width) as usize];
+            line.copy_from_slice(orig);
+        }
+        Image {
+            pixels: buf,
+            width: nw,
+            height: nh,
+        }
+    }
+    fn shrink_factor(&self, fw: u32, fh: u32) -> Image {
+        let mult = 1. / ((fw * fh) as f32);
+        let (nw, nh) = (self.width / fw, self.height / fh);
+        let mut buf = vec![Pixel::black(); (nw * nh) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                let (bx, by) = (x * fw, y * fh);
+                let mut p = Pixel::black();
+                for yy in by..(by + fh) {
+                    for xx in bx..(bx + fw) {
+                        p = p + self.pixels[(yy * self.width + xx) as usize];
+                    }
                 }
-            }
-            self.display(&format!("{}%", r * 100 / 255));
-        }
-        self.display(&format!("Failures: {}/{}", count, 255 * 255 * 255));
-        println!("");
-        self.draw();
-    }
-    fn display(&self, s: &str) {
-        let mut buf = s.chars().map(|c| (c as u32) as u16).collect::<Vec<_>>();
-        let info = self.console.get_info_ex().unwrap();
-        let win = info.window();
-        let width = win.right() - win.left();
-        buf.resize(width as usize, 32);
-        let pos = info.cursor();
-        self.console.write_output_chars(&buf, pos).unwrap();
-    }
-}
-impl Drop for Ascii {
-    fn drop(&mut self) {
-        let mut s = String::new();
-        stdin().read_line(&mut s).unwrap();
-        self.console.set_info_ex(&self.cinfo).unwrap();
-    }
-}
-#[bench] fn bench_to_lab(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).xyz_to_lab()
-    })
-}
-#[bench] fn bench_from_lab(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).lab_to_xyz()
-    })
-}
-#[bench] fn bench_to_xyz(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).rgb_to_xyz()
-    })
-}
-#[bench] fn bench_from_xyz(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).xyz_to_rgb()
-    })
-}
-#[bench] fn bench_decode(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::decode(bb(40), bb(41), bb(42))
-    })
-}
-#[bench] fn bench_encode(b: &mut Bencher) {
-    b.iter(|| {
-        Pixel::new(bb(0.5), bb(0.5), bb(0.5)).encode()
-    })
-}
-#[allow(non_snake_case)]
-fn gen1() {
-    use na::{Inv, Iterable, Mat3, Vec3};
-    let (xr, yr) = (0.64, 0.33);
-    let (xg, yg) = (0.30, 0.60);
-    let (xb, yb) = (0.15, 0.06);
-    let (xw, yw) = (0.31271, 0.32902);
-    let (Xw, Yw, Zw) = (xw / yw, 1., (1. - xw - yw) / yw);
-    let (Xr, Xg, Xb) = (xr / yr, xg / yg, xb / yb);
-    let (Yr, Yg, Yb) = (1., 1., 1.);
-    let (Zr, Zg, Zb) = ((1. - xr - yr) / yr, (1. - xg - yg) / yg, (1. - xb - yb) / yb);
-    let mat = Mat3::new(Xr, Xg, Xb, Yr, Yg, Yb, Zr, Zg, Zb);
-    let &[Sr, Sg, Sb] = (mat.inv().unwrap() * Vec3::new(Xw, Yw, Zw)).as_array();
-    let M = Mat3::new(Sr * Xr, Sg * Xg, Sb * Xb, Sr * Yr, Sg * Yg, Sb * Yb, Sr * Zr, Sg * Zg, Sb * Zb);
-    let Mi = M.inv().unwrap();
-    for n in M.iter() {
-        print!("{:.10e}, ", n);
-    }
-    println!("");
-    for n in Mi.iter() {
-        print!("{:.10e}, ", n);
-    }
-}
-fn gen2() {
-    fn c(x: f64) -> f64 {
-        if x <= 0.04045 { x / 12.92 }
-        else { ((x + 0.055) / (1. + 0.055)).powf(2.4) }
-    }
-    for i in 0..256 {
-        if i % 5 == 0 { println!("") }
-        print!("{:.10e}, ", c(i as f64 / 255.))
-    }
-}
-#[allow(non_snake_case, dead_code)]
-fn main2() {
-    let m = 25.;
-    let c0 = 0.5;
-    let c1 = 3f32.sqrt() / 2.;
-    let c2 = 6f32.sqrt() / 3.;
-    let c3 = 3f32.sqrt() / 3.;
-    let mut v = Vec::new();
-    for x in -20..20 {
-        for y in -20..20 {
-            for z in 0..20 {
-                let (xf, yf, zf) = (x as f32 * m, y as f32 * m, z as f32 * m);
-                let mut a = xf;
-                if y % 2 == 0 { a += m * c0 };
-                let mut b = yf * c1;
-                if z % 2 == 0 { b += m * c3 };
-                let l = zf * c2;
-                let lab = Pixel::new(l, a, b);
-                let xyz = lab.lab_to_xyz();
-                let rgb = xyz.xyz_to_rgb();
-                let (r, g, b) = (rgb.x(), rgb.y(), rgb.z());
-                if r < 0. || r > 1. || g < 0. || g > 1. || b < 0. || b > 1. { continue }
-                let srgb = rgb.encode();
-                let (r, g, b) = ((srgb.x() * 255.) as u8, (srgb.y() * 255.) as u8, (srgb.z() * 255.) as u8);
-                let dist = |x1, y1, z1, x2, y2, z2| {
-                    (x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2) + (z1 - z2) * (z1 - z2)
-                };
-                let d1: f32 = dist(lab.x(), lab.y(), lab.z(), 0., 0., 0.).sqrt();
-                let d2: f32 = dist(lab.x(), lab.y(), lab.z(), 100., 0., 0.).sqrt();
-                v.push(((lab.x(), lab.y(), lab.z()), (r, g, b), d1.min(d2)));
+                buf[(y * nw + x) as usize] = p * mult;
             }
         }
-    }
-    v.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-    for &(lab, rgb, d) in &v {
-        println!("#{:02X}{:02X}{:02X} = ({:.0}, {:.0}, {:.0}) dist={:.0}",
-            rgb.0, rgb.1, rgb.2, lab.0, lab.1, lab.2, d);
-    }
-    println!("Total of {}", v.len());
-    // let p = p.lab_to_xyz().xyz_to_rgb();
-    // println!("{:?}", p);
-    // let p = p.encode();
-    // println!("{:?}", p);
-    // println!("#{:02x}{:02x}{:02x}", (p.0.x * 255.) as u8, (p.0.y * 255.) as u8, (p.0.z * 255.) as u8);
-}
-fn gen_rand_colors() {
-    let mut file = File::create(r"C:\Users\Peter\Dropbox\Public\colors.html").unwrap();
-    writeln!(&mut file, r"<!doctype html>
-<html>
-<head>
-<title>Colors</title>
-<style>
-* {{
-    margin: 0;
-    padding: 0;
-}}
-p {{
-    padding: 5px;
-}}
-</style>
-</head>
-<body>").unwrap();
-    let mut colors = Vec::new();
-    println!("Starting...");
-    for _ in 0..100 {
-        let mut best = ((0u8, 0u8, 0u8), Pixel::new(0., 0., 0.));
-        let mut best_diff = 1000.;
-        for _ in 0..100000 {
-            let (r, g, b) = (random(), random(), random());
-            let rgb = Pixel::decode(r, g, b);
-            let xyz = rgb.rgb_to_xyz();
-            let lab = xyz.xyz_to_lab();
-            let mut diff = 1.;
-            if lab.x() < 50. { continue }
-            for &(_, o_lab) in &colors {
-                diff *= lab.dist(o_lab);
-            }
-            if diff > best_diff {
-                best = ((r, g, b), lab);
-                best_diff = diff;
-            }
-        }
-        writeln!(&mut file, "<p style=\"background-color: #{0:02X}{1:02X}{2:02X}\">#{0:02X}{1:02X}{2:02X}</p>", (best.0).0, (best.0).1, (best.0).2).unwrap();
-        colors.push(best);
-    }
-    println!("Done!");
-    writeln!(&mut file, r"</body>
-</html>").unwrap();
-}
-#[allow(non_snake_case)]
-pub fn main3() {
-    let l = 80f32;
-    let m = 30f32;
-    let (mut oa, mut ob) = (40f32, 0f32);
-    'foo: for _ in 0..12 {
-        let dir = ob.atan2(oa);
-        for i in 0..1000 {
-            let (sin, cos) = (dir + (i as f32) * 0.00314159265358979).sin_cos();
-            let (na, nb) = (oa + m * cos, ob + m * sin);
-            let lab = Pixel::new(l, na, nb);
-            let xyz = lab.lab_to_xyz();
-            let rgb = xyz.xyz_to_rgb();
-            let (r, g, b) = (rgb.x(), rgb.y(), rgb.z());
-            if r < 0. || r > 1. || g < 0. || g > 1. || b < 0. || b > 1. { continue }
-            let srgb = rgb.encode();
-            let (r, g, b) = ((srgb.x() * 255.) as u8, (srgb.y() * 255.) as u8, (srgb.z() * 255.) as u8);
-            println!("#{:02X}{:02X}{:02X}", r, g, b);
-            oa = na;
-            ob = nb;
-            continue 'foo
+        Image {
+            pixels: buf,
+            width: nw,
+            height: nh,
         }
     }
-}
-fn image_pixel_sum() {
-    let img = image::open(&Path::new(&args().nth(1).unwrap())).unwrap();
-    let img = img.to_rgb();
-    let mut sum = Pixel::new(0., 0., 0.);
-    let t = (img.width() * img.height()) as f32;
-    let total = Pixel::new(t, t, t);
-    for p in img.pixels() {
-        let p = Pixel::decode(p.data[0], p.data[1], p.data[2]);
-        sum = sum + p;
+    fn make_text(&self) -> Vec<CharInfo> {
+        let (w, h) = (self.width, self.height);
+        let mut pixels = self.pixels.clone();
+        pixels.resize(self.pixels.len() + (w as usize) + 1, Pixel::black());
+        let colors: Vec<Pixel> = COLOR_TABLE.iter().map(|&c| {
+            Pixel::from_srgb((c & 0xff) as u8, ((c >> 8) & 0xff) as u8, ((c >> 16) & 0xff) as u8, 0xff)
+        }).collect();
+        let mut buf = Vec::with_capacity((w * h) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let index = y * w + x;
+                let pixel = pixels[index as usize];
+                let (mut best, mut best_diff) = (0, 100.);
+                for i in 0..16 {
+                    let d = colors[i].diff_sq(pixel);
+                    if d < best_diff {
+                        best = i;
+                        best_diff = d;
+                    }
+                }
+                buf.push(CharInfo::new(32, (best << 4) as u16));
+                let err = pixel - colors[best];
+                pixels[(index + 1) as usize] += err * 0.4375;
+                pixels[(index + w - 1) as usize] += err * 0.1875;
+                pixels[(index + w) as usize] += err * 0.3125;
+                pixels[(index + w + 1) as usize] += err * 0.0625;
+            }
+        }
+        buf
     }
-    let r = sum / total;
-    let r = r.rgb_to_xyz();
-    let r = r.xyz_to_lab();
-    println!("{}", r.x());
 }
+
 fn main() {
-    gen_rand_colors();
+    // Load image from file
+    let args: Vec<_> = args().collect();
+    let img = Image::load(&args[1]);
+    // Back up console colors
+    let orig = ScreenBuffer::from_conout().unwrap();
+    let orig_info = orig.info_ex().unwrap();
+    // Create a new console buffer
+    let cout = ScreenBuffer::new().unwrap();
+    // Calculate some dimensions
+    let (fw, fh) = cout.font_size().unwrap();
+    let (fw, fh) = (fw as u32, fh as u32);
+    let (w, h) = (img.width / fw + 1, img.height / fh + 1);
+    // Setup the console buffer info
+    let mut info = cout.info_ex().unwrap();
+    info.0.ColorTable = *COLOR_TABLE;
+    info.0.dwSize.X = w as i16;
+    info.0.dwSize.Y = h as i16;
+    cout.set_info_ex(info).unwrap();
+    cout.set_active().unwrap();
+    // Resize image
+    let img = img.increase_size(w * fw, h * fh);
+    let img = img.shrink_factor(fw, fh);
+    // Display image
+    let text = img.make_text();
+    cout.write_output(&text, (w as i16, h as i16), (0, 0)).unwrap();
+    // Wait for keyboard input
+    let cin = InputBuffer::from_conin().unwrap();
+    cin.flush_input().unwrap();
+    'done: loop {
+        for input in cin.read_input().unwrap() {
+            if let Input::Key{key_code: 0x0D, ..} = input { break 'done }
+        }
+    }
+    // Restore console colors
+    orig.set_info_ex(orig_info).unwrap();
+    orig.set_active().unwrap();
 }

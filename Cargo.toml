@@ -5,8 +5,5 @@ version = "0.0.1"
 authors = ["Peter Atashian <retep998@gmail.com>"]
 
 [dependencies]
-winapi = "*"
-kernel32-sys = "*"
+wio = "*"
 image = { version = "*", features = ["png_codec"], default-features = false }
-nalgebra = "0.2"
-rand = "*"

@@ -1,143 +1,54 @@
-// Copyright © 2014, Peter Atashian
+// Copyright © 2016, Peter Atashian
 
-use na::{Mat3, Norm, Vec3};
-use std::marker::{PhantomData};
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, AddAssign, Div, Mul, Sub};
 
 #[derive(Clone, Copy, Debug)]
-#[allow(non_camel_case_types)]
-pub struct xyY;
-#[derive(Clone, Copy, Debug)]
-#[allow(non_camel_case_types)]
-pub struct sRGB;
-#[derive(Clone, Copy, Debug)]
-pub struct RGB;
-#[derive(Clone, Copy, Debug)]
-pub struct XYZ;
-#[derive(Clone, Copy, Debug)]
-pub struct Lab;
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Pixel<T>(pub Vec3<f32>, PhantomData<T>);
-impl<T> Pixel<T> {
-    pub fn new(_1: f32, _2: f32, _3: f32) -> Pixel<T> {
-        Pixel(Vec3::new(_1, _2, _3), PhantomData)
+pub struct Pixel(f32, f32, f32);
+impl Pixel {
+    pub fn black() -> Pixel { Pixel(0., 0., 0.) }
+    pub fn from_srgb(r: u8, g: u8, b: u8, a: u8) -> Pixel {
+        let r = SRGB_TO_LINEAR[r as usize];
+        let g = SRGB_TO_LINEAR[g as usize];
+        let b = SRGB_TO_LINEAR[b as usize];
+        let a = SRGB_TO_LINEAR[a as usize];
+        Pixel(r * a, g * a, b * a)
     }
-    pub fn magnitude(self) -> f32 {
-        self.0.norm()
-    }
-    pub fn x(&self) -> f32 {
-        self.0.x
-    }
-    pub fn y(&self) -> f32 {
-        self.0.y
-    }
-    pub fn z(&self) -> f32 {
-        self.0.z
-    }
-    pub fn dist(&self, o: Pixel<T>) -> f32 where T: Copy {
-        let d = *self - o;
-        let s = d * d;
-        (s.x() + s.y() + s.z()).sqrt()
+    pub fn diff_sq(self, o: Pixel) -> f32 {
+        let d = self - o;
+        d.0 * d.0 + d.1 * d.1 + d.2 * d.2
     }
 }
-impl<T> Add<Pixel<T>> for Pixel<T> {
-    type Output = Pixel<T>;
-    fn add(self, o: Pixel<T>) -> Pixel<T> {
-        Pixel(self.0 + o.0, PhantomData)
+impl Add<Pixel> for Pixel {
+    type Output = Pixel;
+    fn add(self, o: Pixel) -> Pixel {
+        Pixel(self.0 + o.0, self.1 + o.1, self.2 + o.2)
     }
 }
-impl<T> Sub<Pixel<T>> for Pixel<T> {
-    type Output = Pixel<T>;
-    fn sub(self, o: Pixel<T>) -> Pixel<T> {
-        Pixel(self.0 - o.0, PhantomData)
+impl AddAssign<Pixel> for Pixel {
+    fn add_assign(&mut self, o: Pixel) {
+        self.0 += o.0;
+        self.1 += o.1;
+        self.2 += o.2;
     }
 }
-impl<T> Mul<Pixel<T>> for Pixel<T> {
-    type Output = Pixel<T>;
-    fn mul(self, o: Pixel<T>) -> Pixel<T> {
-        Pixel(self.0 * o.0, PhantomData)
+impl Div<f32> for Pixel {
+    type Output = Pixel;
+    fn div(self, o: f32) -> Pixel {
+        Pixel(self.0 / o, self.1 / o, self.2 / o)
     }
 }
-impl<T> Div<Pixel<T>> for Pixel<T> {
-    type Output = Pixel<T>;
-    fn div(self, o: Pixel<T>) -> Pixel<T> {
-        Pixel(self.0 / o.0, PhantomData)
+impl Mul<f32> for Pixel {
+    type Output = Pixel;
+    fn mul(self, o: f32) -> Pixel {
+        Pixel(self.0 * o, self.1 * o, self.2 * o)
     }
 }
-impl Pixel<Lab> {
-    #[allow(non_snake_case)]
-    pub fn lab_to_xyz(&self) -> Pixel<XYZ> {
-        fn f(t: f32) -> f32 {
-            if t > 2.0689655172e-1 { t * t * t }
-            else { 1.2841854935e-1 * ( t - 1.3793103448e-1) }
-        }
-        let (Xn, Yn, Zn) = (0.95047, 1.00000, 1.08883);
-        let &[L, a, b] = self.0.as_array();
-        let Ln = 8.6206896552e-3 * (L + 16.);
-        let (X, Y, Z) = (Xn * f(Ln + a * 0.002), Yn * f(Ln), Zn * f(Ln - b * 0.005));
-        Pixel(Vec3::new(X, Y, Z), PhantomData)
+impl Sub<Pixel> for Pixel {
+    type Output = Pixel;
+    fn sub(self, o: Pixel) -> Pixel {
+        Pixel(self.0 - o.0, self.1 - o.1, self.2 - o.2)
     }
 }
-impl Pixel<XYZ> {
-    pub fn xyz_to_rgb(&self) -> Pixel<RGB> {
-        Pixel(XYZ_TO_RGB * self.0, PhantomData)
-    }
-    #[allow(non_snake_case)]
-    pub fn xyz_to_lab(&self) -> Pixel<Lab> {
-        // Seriously, this is an order of magnitude faster
-        #[allow(dead_code)]
-        fn cbrt(t: f32) -> f32 {
-            use std::mem::transmute;
-            let ix: u32 = unsafe { transmute(t) };
-            let ix = ix / 4 + ix / 16;
-            let ix = ix + ix / 16;
-            let ix = ix + ix / 256;
-            let ix = 0x2a5137a0 + ix;
-            let x: f32 = unsafe { transmute(ix) };
-            let x = 0.33333333 * (2. * x + t / (x * x));
-            0.33333333 * (2. * x + t / (x * x))
-        }
-        fn f(t: f32) -> f32 {
-            if t > 8.8564516790e-3 { t.cbrt() }
-            else { 7.7870370370e0 * t + 1.3793103448e-1 }
-        }
-        let (Xr, Yr, Zr) = (0.95047f32.recip(), 1.00000f32.recip(), 1.08883f32.recip());
-        let &[X, Y, Z] = self.0.as_array();
-        let (fx, fy, fz) = (f(X * Xr), f(Y * Yr), f(Z * Zr));
-        let (L, a, b) = (116. * fy - 16., 500. * (fx - fy), 200. * (fy - fz));
-        Pixel(Vec3::new(L, a, b), PhantomData)
-    }
-}
-impl Pixel<RGB> {
-    pub fn decode(r: u8, g: u8, b: u8) -> Pixel<RGB> {
-        Pixel(Vec3::new(
-            SRGB_TO_LINEAR[r as usize],
-            SRGB_TO_LINEAR[g as usize],
-            SRGB_TO_LINEAR[b as usize],
-        ), PhantomData)
-    }
-    pub fn rgb_to_xyz(self) -> Pixel<XYZ> {
-        Pixel(RGB_TO_XYZ * self.0, PhantomData)
-    }
-    pub fn encode(self) -> Pixel<sRGB> {
-        fn c(x: f32) -> f32 {
-            if x <= 0.0031308 { 12.92 * x }
-            else { (1.055) * x.powf(1. / 2.4) - 0.055 }
-        }
-        let v = self.0;
-        Pixel(Vec3::new(c(v.x), c(v.y), c(v.z)), PhantomData)
-    }
-}
-const RGB_TO_XYZ: Mat3<f32> = Mat3 {
-    m11: 4.1238656325e-1, m21: 2.1263682168e-1, m31: 1.9330620152e-2,
-    m12: 3.5759149092e-1, m22: 7.1518298184e-1, m32: 1.1919716364e-1,
-    m13: 1.8045049120e-1, m23: 7.2180196481e-2, m33: 9.5037258701e-1,
-};
-const XYZ_TO_RGB: Mat3<f32> = Mat3 {
-    m11: 3.2410032330e0, m21: -9.6922425220e-1, m31: 5.5639419852e-2,
-    m12: -1.5373989695e0, m22: 1.8759299837e0, m32: -2.0401120612e-1,
-    m13: -4.9861588200e-1, m23: 4.1554226340e-2, m33: 1.0571489772e0, 
-};
 const SRGB_TO_LINEAR: &'static [f32; 256] = &[
     0.0000000000e0, 3.0352698355e-4, 6.0705396710e-4, 9.1058095065e-4, 1.2141079342e-3,
     1.5176349177e-3, 1.8211619013e-3, 2.1246888848e-3, 2.4282158684e-3, 2.7317428519e-3,
