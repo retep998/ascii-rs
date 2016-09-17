@@ -194,7 +194,7 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8)]) -> Vec<C
                         let d1 = pixel.diff_sq(fg);
                         let d2 = pixel.diff_sq(bg);
                         let dd = pixel.diff_sq(combined);
-                        let d = (d1 + d2) * 0.1 + dd;
+                        let d = (d1 + d2) * 0.01 + dd;
                         if d < best_diff {
                             best_fg = c1;
                             best_bg = c2;
