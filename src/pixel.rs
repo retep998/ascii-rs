@@ -6,16 +6,15 @@ use std::ops::{Add, AddAssign, Div, Mul, Sub};
 pub struct Pixel(f32, f32, f32);
 impl Pixel {
     pub fn black() -> Pixel { Pixel(0., 0., 0.) }
-    pub fn from_srgb(r: u8, g: u8, b: u8, a: u8) -> Pixel {
+    pub fn from_srgb(r: u8, g: u8, b: u8) -> Pixel {
         let r = SRGB_TO_LINEAR[r as usize];
         let g = SRGB_TO_LINEAR[g as usize];
         let b = SRGB_TO_LINEAR[b as usize];
-        let a = SRGB_TO_LINEAR[a as usize];
-        Pixel(r * a, g * a, b * a)
+        Pixel(r, g, b)
     }
     pub fn diff_sq(self, o: Pixel) -> f32 {
         let d = self - o;
-        d.0 * d.0 + d.1 * d.1 + d.2 * d.2
+        0.299 * d.0 * d.0 + 0.587 * d.1 * d.1 + 0.114 * d.2 * d.2
     }
 }
 impl Add<Pixel> for Pixel {
