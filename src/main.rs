@@ -71,6 +71,12 @@ impl Image {
         }
     }
     fn make_text(&self) -> Vec<CharInfo> {
+        let chars = [
+            (' ' as u16, 0.00),
+            ('░' as u16, 0.25),
+            ('▒' as u16, 0.50),
+            ('▓' as u16, 0.75),
+        ];
         let (w, h) = (self.width, self.height);
         let mut pixels = self.pixels.clone();
         pixels.resize(self.pixels.len() + (w as usize) + 1, Pixel::black());
@@ -82,16 +88,30 @@ impl Image {
             for x in 0..w {
                 let index = y * w + x;
                 let pixel = pixels[index as usize];
-                let (mut best, mut best_diff) = (0, 100.);
-                for i in 0..16 {
-                    let d = colors[i].diff_sq(pixel);
-                    if d < best_diff {
-                        best = i;
-                        best_diff = d;
+                let mut best_fg = 0;
+                let mut best_bg = 0;
+                let mut best_char = 20;
+                let mut best_color = Pixel::black();
+                let mut best_diff = 100.;
+                for c1 in 0..16 {
+                    for c2 in 0..16 {
+                        let fg = colors[c1];
+                        let bg = colors[c2];
+                        for &(ch, m) in &chars {
+                            let combined = fg * m + bg * (1. - m);
+                            let d = combined.diff_sq(pixel);
+                            if d < best_diff {
+                                best_fg = c1;
+                                best_bg = c2;
+                                best_char = ch;
+                                best_color = combined;
+                                best_diff = d;
+                            }
+                        }
                     }
                 }
-                buf.push(CharInfo::new(32, (best << 4) as u16));
-                let err = pixel - colors[best];
+                buf.push(CharInfo::new(best_char, ((best_bg << 4) | best_fg) as u16));
+                let err = pixel - best_color;
                 pixels[(index + 1) as usize] += err * 0.4375;
                 pixels[(index + w - 1) as usize] += err * 0.1875;
                 pixels[(index + w) as usize] += err * 0.3125;
