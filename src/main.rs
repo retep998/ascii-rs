@@ -16,12 +16,6 @@ const COLORS: &'static [(u8, u8, u8); 16] = &[
     (0x80, 0x80, 0x80), (0x00, 0x00, 0xFF), (0x00, 0xFF, 0x00), (0x00, 0xFF, 0xFF),
     (0xFF, 0x00, 0x00), (0xFF, 0x00, 0xFF), (0xFF, 0xFF, 0x00), (0xFF, 0xFF, 0xFF),
 ];
-const COLOR_TABLE: &'static [u32; 16] = &[
-    0x000000, 0x800000, 0x008000, 0x808000,
-    0x000080, 0x800080, 0x008080, 0xC0C0C0,
-    0x808080, 0xFF0000, 0x00FF00, 0xFFFF00,
-    0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF,
-];
 
 const CHARS: &'static [u16; 256] = &[
     0x0020, 0x263a, 0x263b, 0x2665, 0x2666, 0x2663, 0x2660, 0x2022,
@@ -119,44 +113,6 @@ fn load(s: &str) -> (u32, u32, Vec<(u8, u8, u8)>) {
     }).collect();
     (img.width(), img.height(), data)
 }
-// Someone please make this better
-fn optimal_palette(data: &[(u8, u8, u8)]) -> Vec<(u8, u8, u8)> {
-    let mut sets = vec![data.to_owned()];
-    for _ in 0..4 {
-        let mut next = vec![];
-        for set in &sets {
-            let (d1, d2) = mean_cut(set);
-            next.push(d1);
-            next.push(d2);
-        }
-        sets = next;
-    }
-    sets.iter().map(|set| average(set)).collect()
-}
-fn average(data: &[(u8, u8, u8)]) -> (u8, u8, u8) {
-    let total = data.len() as u64;
-    let (r, g, b) = data.iter().fold((0u64, 0u64, 0u64), |(r, g, b), p| {
-        (r + p.0 as u64, g + p.1 as u64, b + p.2 as u64)
-    });
-    ((r / total) as u8, (g / total) as u8, (b / total) as u8)
-}
-fn mean_cut(data: &[(u8, u8, u8)]) -> (Vec<(u8, u8, u8)>, Vec<(u8, u8, u8)>) {
-    let (ar, ag, ab) = average(data);
-    let (rd, gd, bd) = data.iter().fold((0u64, 0u64, 0u64), |(r, g, b), p| {
-        let (dr, dg, db) = ((ar - p.0) as u64, (ag - p.1) as u64, (ab - p.2) as u64);
-        (r + dr * dr, g + dg * dg, b + db * db)
-    });
-    if rd > gd && rd > bd {
-        (data.iter().cloned().filter(|&(r, _, _)| r < ar).collect(),
-         data.iter().cloned().filter(|&(r, _, _)| r >= ar).collect())
-    } else if gd > rd && gd > bd {
-        (data.iter().cloned().filter(|&(_, g, _)| g < ag).collect(),
-         data.iter().cloned().filter(|&(_, g, _)| g >= ag).collect())
-    } else {
-        (data.iter().cloned().filter(|&(_, _, b)| b < ab).collect(),
-         data.iter().cloned().filter(|&(_, _, b)| b >= ab).collect())
-    }
-}
 fn color_table(d: &[(u8, u8, u8)]) -> [u32; 16] {
     fn c((r, g, b): (u8, u8, u8)) -> u32 {
         (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
@@ -191,10 +147,10 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8)]) -> Vec<C
                     let bg = colors[c2];
                     for &(ch, m) in chars {
                         let combined = fg * m + bg * (1. - m);
-                        let d1 = pixel.diff_sq(fg);
-                        let d2 = pixel.diff_sq(bg);
+                        let d1 = pixel.lum_diff(fg);
+                        let d2 = pixel.lum_diff(bg);
                         let dd = pixel.diff_sq(combined);
-                        let d = (d1 + d2) * 0.01 + dd;
+                        let d = (d1 + d2) * 0.1 + dd;
                         if d < best_diff {
                             best_fg = c1;
                             best_bg = c2;
@@ -252,15 +208,21 @@ fn main() {
     let (w, h) = (img.width / fw + 1, img.height / fh + 1);
     // Figure out characters
     let chars = calculate_chars(fw, fh);
-    //let colors = optimal_palette(&srgb);
     let colors = COLORS.to_owned();
     // Setup the console buffer info
     let mut info = cout.info_ex().unwrap();
-    info.0.ColorTable = color_table(&colors);
-    info.0.dwSize.X = w as i16;
-    info.0.dwSize.Y = h as i16;
-    cout.set_info_ex(info).unwrap();
+    {
+        let rinfo = info.raw_mut();
+        rinfo.ColorTable = color_table(&colors);
+        rinfo.dwSize.X = w as i16;
+        rinfo.dwSize.Y = h as i16;
+        rinfo.srWindow.Right = w as i16;
+        rinfo.srWindow.Bottom = h as i16;
+        rinfo.dwMaximumWindowSize.X = w as i16;
+        rinfo.dwMaximumWindowSize.Y = h as i16;
+    }
     cout.set_active().unwrap();
+    cout.set_info_ex(info).unwrap();
     // Resize image
     let img = img.increase_size(w * fw, h * fh);
     let img = img.shrink_factor(fw, fh);

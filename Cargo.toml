@@ -1,8 +1,10 @@
 [package]
-
 name = "ascii"
 version = "0.0.1"
 authors = ["Peter Atashian <retep998@gmail.com>"]
+
+[profile.release]
+debug = true
 
 [dependencies]
 wio = "*"

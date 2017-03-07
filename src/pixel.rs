@@ -12,9 +12,16 @@ impl Pixel {
         let b = SRGB_TO_LINEAR[b as usize];
         Pixel(r, g, b)
     }
+    pub fn luminosity(self) -> f32 {
+        0.2126 * self.0 + 0.7152 * self.1 + 0.0722 * self.2
+    }
     pub fn diff_sq(self, o: Pixel) -> f32 {
         let d = self - o;
-        0.299 * d.0 * d.0 + 0.587 * d.1 * d.1 + 0.114 * d.2 * d.2
+        d.0 * d.0 + d.1 * d.1 + d.2 * d.2
+    }
+    pub fn lum_diff(self, o: Pixel) -> f32 {
+        let l = self.luminosity() - o.luminosity();
+        l * l
     }
 }
 impl Add<Pixel> for Pixel {
