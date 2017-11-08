@@ -16,6 +16,10 @@ const COLORS: &'static [(u8, u8, u8); 16] = &[
     (0x80, 0x80, 0x80), (0x00, 0x00, 0xFF), (0x00, 0xFF, 0x00), (0x00, 0xFF, 0xFF),
     (0xFF, 0x00, 0x00), (0xFF, 0x00, 0xFF), (0xFF, 0xFF, 0x00), (0xFF, 0xFF, 0xFF),
 ];
+const GRAYSCALE: &'static [u8; 16] = &[
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+];
 
 const CHARS: &'static [u16; 256] = &[
     0x0020, 0x263a, 0x263b, 0x2665, 0x2666, 0x2663, 0x2660, 0x2022,
@@ -104,6 +108,47 @@ impl Image {
         }
     }
 }
+enum Mode {
+    Color,
+    Grayscale,
+    Monochrome,
+}
+impl Mode {
+    fn color_table(&self) -> [u32; 16] {
+        match *self {
+            Mode::Color => {
+                let d = COLORS;
+                fn c((r, g, b): (u8, u8, u8)) -> u32 {
+                    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+                }
+                [
+                    c(d[0x0]), c(d[0x1]), c(d[0x2]), c(d[0x3]),
+                    c(d[0x4]), c(d[0x5]), c(d[0x6]), c(d[0x7]),
+                    c(d[0x8]), c(d[0x9]), c(d[0xA]), c(d[0xB]),
+                    c(d[0xC]), c(d[0xD]), c(d[0xE]), c(d[0xF]),
+                ]
+            },
+            Mode::Grayscale => {
+                let d = GRAYSCALE;
+                fn c(x: u8) -> u32 {
+                    (x as u32) | ((x as u32) << 8) | ((x as u32) << 16)
+                }
+                [
+                    c(d[0x0]), c(d[0x1]), c(d[0x2]), c(d[0x3]),
+                    c(d[0x4]), c(d[0x5]), c(d[0x6]), c(d[0x7]),
+                    c(d[0x8]), c(d[0x9]), c(d[0xA]), c(d[0xB]),
+                    c(d[0xC]), c(d[0xD]), c(d[0xE]), c(d[0xF]),
+                ]
+            },
+            Mode::Monochrome => {
+                [
+                    0xFFFFFF, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 0, 0,
+                ]
+            },
+        }
+    }
+}
 fn load(s: &str) -> (u32, u32, Vec<(u8, u8, u8)>) {
     let img = open(s).unwrap();
     let img = img.to_rgba();
@@ -113,18 +158,7 @@ fn load(s: &str) -> (u32, u32, Vec<(u8, u8, u8)>) {
     }).collect();
     (img.width(), img.height(), data)
 }
-fn color_table(d: &[(u8, u8, u8)]) -> [u32; 16] {
-    fn c((r, g, b): (u8, u8, u8)) -> u32 {
-        (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
-    }
-    [
-        c(d[0x0]), c(d[0x1]), c(d[0x2]), c(d[0x3]),
-        c(d[0x4]), c(d[0x5]), c(d[0x6]), c(d[0x7]),
-        c(d[0x8]), c(d[0x9]), c(d[0xa]), c(d[0xb]),
-        c(d[0xc]), c(d[0xd]), c(d[0xe]), c(d[0xf]),
-    ]
-}
-fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8)]) -> Vec<CharInfo> {
+fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8); 16]) -> Vec<CharInfo> {
     let (w, h) = (img.width, img.height);
     let mut pixels = img.pixels;
     pixels.resize((w * h + w + 1) as usize, Pixel::black());
@@ -171,6 +205,56 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8)]) -> Vec<C
     }
     buf
 }
+fn grayscale_make_text(img: Image, chars: &[(u16, f32)], colors: &[u8]) -> Vec<CharInfo> {
+    let (w, h) = (img.width, img.height);
+    let mut pixels = img.pixels;
+    pixels.resize((w * h + w + 1) as usize, Pixel::black());
+    let mut pixels: Vec<f32> = pixels.iter().map(|pixel| {
+        pixel.luminosity()
+    }).collect();
+    let colors: Vec<f32> = colors.iter().map(|&x| {
+        Pixel::from_srgb(x, x, x).luminosity()
+    }).collect();
+    let mut buf = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let index = y * w + x;
+            let pixel = pixels[index as usize];
+            let mut best_fg = 0;
+            let mut best_bg = 0;
+            let mut best_char = 20;
+            let mut best_color = 0.;
+            let mut best_diff = 100.;
+            for c1 in 0..colors.len() {
+                for c2 in 0..colors.len() {
+                    let fg = colors[c1];
+                    let bg = colors[c2];
+                    for &(ch, m) in chars {
+                        let combined = fg * m + bg * (1. - m);
+                        let d1 = (pixel - fg).abs();
+                        let d2 = (pixel - bg).abs();
+                        let dd = (pixel - combined).abs();
+                        let d = (d1 + d2) * 0.1 + dd;
+                        if d < best_diff {
+                            best_fg = c1;
+                            best_bg = c2;
+                            best_char = ch;
+                            best_color = combined;
+                            best_diff = d;
+                        }
+                    }
+                }
+            }
+            buf.push(CharInfo::new(best_char, ((best_bg << 4) | best_fg) as u16));
+            let err = pixel - best_color;
+            pixels[(index + 1) as usize] += err * 0.4375;
+            pixels[(index + w - 1) as usize] += err * 0.1875;
+            pixels[(index + w) as usize] += err * 0.3125;
+            pixels[(index + w + 1) as usize] += err * 0.0625;
+        }
+    }
+    buf
+}
 fn calculate_chars(w: u32, h: u32) -> Vec<(u16, f32)> {
     let name = format!("{}x{}.png", w, h);
     let img = open(&name).unwrap().to_rgba();
@@ -195,7 +279,17 @@ fn calculate_chars(w: u32, h: u32) -> Vec<(u16, f32)> {
 fn main() {
     // Load image from file
     let args: Vec<_> = args().collect();
-    let (width, height, srgb) = load(&args[1]);
+    let mut filename = args.get(2).map(|x| &**x);
+    let mode = match &*args[1] {
+        "color" => Mode::Color,
+        "grayscale" => Mode::Grayscale,
+        "monochrome" => Mode::Monochrome,
+        file => {
+            filename = Some(file);
+            Mode::Color
+        },
+    };
+    let (width, height, srgb) = load(filename.unwrap());
     let img = Image::from_srgb(&srgb, width, height);
     // Back up console colors
     let orig = ScreenBuffer::from_conout().unwrap();
@@ -208,12 +302,11 @@ fn main() {
     let (w, h) = (img.width / fw + 1, img.height / fh + 1);
     // Figure out characters
     let chars = calculate_chars(fw, fh);
-    let colors = COLORS.to_owned();
     // Setup the console buffer info
     let mut info = cout.info_ex().unwrap();
     {
         let rinfo = info.raw_mut();
-        rinfo.ColorTable = color_table(&colors);
+        rinfo.ColorTable = mode.color_table();
         rinfo.dwSize.X = w as i16;
         rinfo.dwSize.Y = h as i16;
         rinfo.srWindow.Right = w as i16;
@@ -227,7 +320,11 @@ fn main() {
     let img = img.increase_size(w * fw, h * fh);
     let img = img.shrink_factor(fw, fh);
     // Display image
-    let text = make_text(img, &chars, &colors);
+    let text = match mode {
+        Mode::Color => make_text(img, &chars, COLORS),
+        Mode::Grayscale => grayscale_make_text(img, &chars, GRAYSCALE),
+        Mode::Monochrome => grayscale_make_text(img, &chars, &[0xff, 0x00]),
+    };
     cout.write_output(&text, (w as i16, h as i16), (0, 0)).unwrap();
     // Wait for keyboard input
     let cin = InputBuffer::from_conin().unwrap();

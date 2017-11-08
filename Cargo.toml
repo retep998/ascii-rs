@@ -8,4 +8,4 @@ debug = true
 
 [dependencies]
 wio = "*"
-image = { version = "*", features = ["png_codec"], default-features = false }
+image = { version = "*", features = ["png_codec", "jpeg"], default-features = false }
