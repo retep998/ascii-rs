@@ -1,10 +1,12 @@
 // Copyright © 2016, Peter Atashian
 
 extern crate image;
+extern crate rand;
 extern crate wio;
 
 use image::{open};
 use pixel::{Pixel};
+use rand::{Rng, thread_rng};
 use std::env::{args};
 use wio::console::{CharInfo, Input, InputBuffer, ScreenBuffer};
 
@@ -158,11 +160,12 @@ fn load(s: &str) -> (u32, u32, Vec<(u8, u8, u8)>) {
     }).collect();
     (img.width(), img.height(), data)
 }
-fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8); 16]) -> Vec<CharInfo> {
+fn make_text(img: Image, chars: &[(Vec<Char>, f32)]) -> Vec<CharInfo> {
+    let mut rng = thread_rng();
     let (w, h) = (img.width, img.height);
     let mut pixels = img.pixels;
     pixels.resize((w * h + w + 1) as usize, Pixel::black());
-    let colors: Vec<Pixel> = colors.iter().map(|&(r, g, b)| {
+    let colors: Vec<Pixel> = COLORS.iter().map(|&(r, g, b)| {
         Pixel::from_srgb(r, g, b)
     }).collect();
     let mut buf = Vec::with_capacity((w * h) as usize);
@@ -172,14 +175,14 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8); 16]) -> V
             let pixel = pixels[index as usize];
             let mut best_fg = 0;
             let mut best_bg = 0;
-            let mut best_char = 20;
+            let mut best_char: &[Char] = &[];
             let mut best_color = Pixel::black();
             let mut best_diff = 100.;
             for c1 in 0..16 {
                 for c2 in 0..16 {
                     let fg = colors[c1];
                     let bg = colors[c2];
-                    for &(ch, m) in chars {
+                    for &(ref ch, m) in chars {
                         let combined = fg * m + bg * (1. - m);
                         let d1 = pixel.lum_diff(fg);
                         let d2 = pixel.lum_diff(bg);
@@ -188,14 +191,20 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8); 16]) -> V
                         if d < best_diff {
                             best_fg = c1;
                             best_bg = c2;
-                            best_char = ch;
+                            best_char = &**ch;
                             best_color = combined;
                             best_diff = d;
                         }
                     }
                 }
             }
-            buf.push(CharInfo::new(best_char, ((best_bg << 4) | best_fg) as u16));
+            let char = rng.choose(best_char).unwrap();
+            let attr = if char.invert {
+                (best_fg << 4) | best_bg
+            } else {
+                (best_bg << 4) | best_fg
+            };
+            buf.push(CharInfo::new(char.ch, attr as u16));
             let err = pixel - best_color;
             pixels[(index + 1) as usize] += err * 0.4375;
             pixels[(index + w - 1) as usize] += err * 0.1875;
@@ -205,14 +214,15 @@ fn make_text(img: Image, chars: &[(u16, f32)], colors: &[(u8, u8, u8); 16]) -> V
     }
     buf
 }
-fn grayscale_make_text(img: Image, chars: &[(u16, f32)], colors: &[u8]) -> Vec<CharInfo> {
+fn grayscale_make_text(img: Image, chars: &[(Vec<Char>, f32)]) -> Vec<CharInfo> {
+    let mut rng = thread_rng();
     let (w, h) = (img.width, img.height);
     let mut pixels = img.pixels;
     pixels.resize((w * h + w + 1) as usize, Pixel::black());
     let mut pixels: Vec<f32> = pixels.iter().map(|pixel| {
         pixel.luminosity()
     }).collect();
-    let colors: Vec<f32> = colors.iter().map(|&x| {
+    let colors: Vec<f32> = GRAYSCALE.iter().map(|&x| {
         Pixel::from_srgb(x, x, x).luminosity()
     }).collect();
     let mut buf = Vec::with_capacity((w * h) as usize);
@@ -222,30 +232,36 @@ fn grayscale_make_text(img: Image, chars: &[(u16, f32)], colors: &[u8]) -> Vec<C
             let pixel = pixels[index as usize];
             let mut best_fg = 0;
             let mut best_bg = 0;
-            let mut best_char = 20;
+            let mut best_char: &[Char] = &[];
             let mut best_color = 0.;
             let mut best_diff = 100.;
             for c1 in 0..colors.len() {
                 for c2 in 0..colors.len() {
                     let fg = colors[c1];
                     let bg = colors[c2];
-                    for &(ch, m) in chars {
+                    for &(ref ch, m) in chars {
                         let combined = fg * m + bg * (1. - m);
                         let d1 = (pixel - fg).abs();
                         let d2 = (pixel - bg).abs();
                         let dd = (pixel - combined).abs();
-                        let d = (d1 + d2) * 0.1 + dd;
+                        let d = (d1 + d2) * 0.05 + dd;
                         if d < best_diff {
                             best_fg = c1;
                             best_bg = c2;
-                            best_char = ch;
+                            best_char = &**ch;
                             best_color = combined;
                             best_diff = d;
                         }
                     }
                 }
             }
-            buf.push(CharInfo::new(best_char, ((best_bg << 4) | best_fg) as u16));
+            let char = rng.choose(best_char).unwrap();
+            let attr = if char.invert {
+                (best_fg << 4) | best_bg
+            } else {
+                (best_bg << 4) | best_fg
+            };
+            buf.push(CharInfo::new(char.ch, attr as u16));
             let err = pixel - best_color;
             pixels[(index + 1) as usize] += err * 0.4375;
             pixels[(index + w - 1) as usize] += err * 0.1875;
@@ -255,11 +271,53 @@ fn grayscale_make_text(img: Image, chars: &[(u16, f32)], colors: &[u8]) -> Vec<C
     }
     buf
 }
-fn calculate_chars(w: u32, h: u32) -> Vec<(u16, f32)> {
+fn monochrome_make_text(img: Image, chars: &[(Vec<Char>, f32)]) -> Vec<CharInfo> {
+    let mut rng = thread_rng();
+    let (w, h) = (img.width, img.height);
+    let mut pixels = img.pixels;
+    pixels.resize((w * h + w + 1) as usize, Pixel::black());
+    let mut pixels: Vec<f32> = pixels.iter().map(|pixel| {
+        pixel.luminosity()
+    }).collect();
+    let mut buf = Vec::with_capacity((w * h) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let index = y * w + x;
+            let pixel = pixels[index as usize];
+            let mut best_char: &[Char] = &[];
+            let mut best_diff = 100.;
+            let mut best_color = 0.;
+            for &(ref ch, color) in chars {
+                let diff = (pixel - color).abs();
+                if diff < best_diff {
+                    best_diff = diff;
+                    best_color = color;
+                    best_char = &**ch;
+                }
+            }
+            let char = rng.choose(best_char).unwrap();
+            buf.push(CharInfo::new(char.ch, if char.invert { 0x02 } else { 0x20 }));
+            let err = pixel - best_color;
+            pixels[(index + 1) as usize] += err * 0.4375;
+            pixels[(index + w - 1) as usize] += err * 0.1875;
+            pixels[(index + w) as usize] += err * 0.3125;
+            pixels[(index + w + 1) as usize] += err * 0.0625;
+        }
+    }
+    buf
+}
+#[derive(Copy, Clone)]
+struct Char {
+    ch: u16,
+    invert: bool,
+}
+fn calculate_chars(w: u32, h: u32) -> Vec<(Vec<Char>, f32)> {
     let name = format!("{}x{}.png", w, h);
     let img = open(&name).unwrap().to_rgba();
-    let mult = 1. / ((w * h) as f32);
-    let mut res: Vec<_> = CHARS.iter().enumerate().map(|(i, &ch)| {
+    let total = (w * h) as usize;
+    let mult = 1. / (total as f32);
+    let mut res: Vec<Vec<Char>> = vec![Vec::new(); total + 1];
+    for (i, &ch) in CHARS.iter().enumerate() {
         let i = i as u32;
         let mut sum = 0;
         let (bx, by) = (i % 16 * w, i / 16 * h);
@@ -269,12 +327,10 @@ fn calculate_chars(w: u32, h: u32) -> Vec<(u16, f32)> {
                 if pix.data[0] != 0 { sum += 1; }
             }
         }
-        (ch, sum)
-    }).filter(|&(_, sum)| sum * 2 <= w * h).collect();
-    res.sort_by(|a, b| a.1.cmp(&b.1));
-    let mut last = 273;
-    res.retain(|&(_, sum)| if sum == last { false } else { last = sum; true });
-    res.into_iter().map(|(ch, sum)| (ch, (sum as f32) * mult)).collect()
+        res[sum].push(Char { ch: ch, invert: false });
+        res[total - sum].push(Char { ch: ch, invert: true });
+    }
+    res.into_iter().enumerate().filter(|&(_, ref ch)| ch.len() != 0).map(|(sum, ch)| (ch, (sum as f32) * mult)).collect()
 }
 fn main() {
     // Load image from file
@@ -321,9 +377,10 @@ fn main() {
     let img = img.shrink_factor(fw, fh);
     // Display image
     let text = match mode {
-        Mode::Color => make_text(img, &chars, COLORS),
-        Mode::Grayscale => grayscale_make_text(img, &chars, GRAYSCALE),
-        Mode::Monochrome => grayscale_make_text(img, &chars, &[0xff, 0x00]),
+        Mode::Color => make_text(img, &chars),
+        Mode::Grayscale => grayscale_make_text(img, &chars),
+        Mode::Monochrome => monochrome_make_text(img, &chars),
+        //_ => unreachable!(),
     };
     cout.write_output(&text, (w as i16, h as i16), (0, 0)).unwrap();
     // Wait for keyboard input
